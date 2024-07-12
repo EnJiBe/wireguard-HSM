@@ -264,8 +264,14 @@ func (device *Device) ConsumeMessageInitiation(msg *MessageInitiation) *Peer {
 	// decrypt static key
 	var peerPK NoisePublicKey
 	var key [chacha20poly1305.KeySize]byte
-	ss, err := device.staticIdentity.privateKey.sharedSecret(msg.Ephemeral)
-	if err != nil {
+	var ss [NoisePublicKeySize]byte
+	var err error
+	if device.staticIdentity.hsmEnabled {
+		ss, err = device.staticIdentity.hsm.DeriveNoise(msg.Ephemeral)
+	} else {
+		ss, err = device.staticIdentity.privateKey.sharedSecret(msg.Ephemeral)
+	}
+	if isZero(ss[:]) || err != nil {
 		return nil
 	}
 	KDF2(&chainKey, &key, chainKey[:], ss[:])
@@ -461,10 +467,16 @@ func (device *Device) ConsumeMessageResponse(msg *MessageResponse) *Peer {
 		mixKey(&chainKey, &chainKey, ss[:])
 		setZero(ss[:])
 
-		ss, err = device.staticIdentity.privateKey.sharedSecret(msg.Ephemeral)
+		if device.staticIdentity.hsmEnabled {
+			ss, err = device.staticIdentity.hsm.DeriveNoise(msg.Ephemeral)
+		} else {
+			ss, err = device.staticIdentity.privateKey.sharedSecret(msg.Ephemeral)
+		}
+
 		if err != nil {
 			return false
 		}
+
 		mixKey(&chainKey, &chainKey, ss[:])
 		setZero(ss[:])
 

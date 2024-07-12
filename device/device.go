@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/garnoth/pkclient"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/ratelimiter"
 	"golang.zx2c4.com/wireguard/rwcancel"
@@ -51,6 +52,8 @@ type Device struct {
 		sync.RWMutex
 		privateKey NoisePrivateKey
 		publicKey  NoisePublicKey
+		hsm        *pkclient.PKClient
+		hsmEnabled bool
 	}
 
 	peers struct {
@@ -232,7 +235,9 @@ func (device *Device) SetPrivateKey(sk NoisePrivateKey) error {
 	device.staticIdentity.Lock()
 	defer device.staticIdentity.Unlock()
 
-	if sk.Equals(device.staticIdentity.privateKey) {
+	// if the hsm is enabled, let this function continue, since the privateKey is zero
+	if sk.Equals(device.staticIdentity.privateKey) &&
+		!device.staticIdentity.hsmEnabled {
 		return nil
 	}
 
@@ -247,7 +252,14 @@ func (device *Device) SetPrivateKey(sk NoisePrivateKey) error {
 
 	// remove peers with matching public keys
 
-	publicKey := sk.publicKey()
+	var publicKey NoisePublicKey
+	if device.staticIdentity.hsmEnabled {
+		publicKey, _ = device.staticIdentity.hsm.PublicKeyNoise()
+
+	} else {
+		publicKey = sk.publicKey()
+	}
+
 	for key, peer := range device.peers.keyMap {
 		if peer.handshake.remoteStatic.Equals(publicKey) {
 			peer.handshake.mutex.RUnlock()
@@ -377,7 +389,9 @@ func (device *Device) Close() {
 	}
 	device.state.state.Store(uint32(deviceStateClosed))
 	device.log.Verbosef("Device closing")
-
+	if device.staticIdentity.hsmEnabled {
+		device.staticIdentity.hsm.Close()
+	}
 	device.tun.device.Close()
 	device.downLocked()
 

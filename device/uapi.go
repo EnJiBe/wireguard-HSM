@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/garnoth/pkclient"
 	"golang.zx2c4.com/wireguard/ipc"
 )
 
@@ -196,6 +197,43 @@ func (device *Device) IpcSetOperation(r io.Reader) (err error) {
 
 func (device *Device) handleDeviceLine(key, value string) error {
 	switch key {
+	case "hsm":
+		params := strings.Split(value, ",")
+		// Example config file syntax:
+		// hsm {path to HSM module}, {slot id}, {pin}
+		// hsm {path to HSM module}, {slot id}  // omit pin to prompt user
+
+		slot, err := strconv.Atoi(params[1])
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "hsm slot invalid: %w", err)
+		}
+		device.log.Verbosef("UAPI: hsm library path:%s", params[0])
+		device.log.Verbosef("UAPI: hsm slot:%s", params[1])
+		var hsmDevice *pkclient.PKClient
+		if len(params) < 3 || params[2] == "" { // pin not saved, get directly from user input
+
+			device.log.Verbosef("UAPI: Attempting to get pin from user")
+			hsmDevice, err = pkclient.New_AskPin(params[0], uint(slot))
+			if err != nil {
+				return ipcErrorf(ipc.IpcErrorInvalid, "hsm setup failed: %w", err)
+			}
+		} else { // pin supplied in config file
+
+			device.log.Verbosef("UAPI: Reading pin from config file")
+			hsmDevice, err = pkclient.New(params[0], uint(slot), params[2])
+			if err != nil {
+				return ipcErrorf(ipc.IpcErrorInvalid, "hsm setup failed: %w", err)
+			}
+		}
+
+		fmt.Printf("HSM loaded, found public key: %s\n", hsmDevice.PublicKeyB64())
+		device.staticIdentity.hsm = hsmDevice
+		device.staticIdentity.hsmEnabled = true
+
+		// call private key with an all zeros private key
+		var blankPK NoisePrivateKey
+		device.SetPrivateKey(blankPK)
+
 	case "private_key":
 		var sk NoisePrivateKey
 		err := sk.FromMaybeZeroHex(value)
